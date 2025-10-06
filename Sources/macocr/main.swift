@@ -1,5 +1,7 @@
 import Cocoa
 import Vision
+import CoreImage
+
 
 // https://developer.apple.com/documentation/vision/vnrecognizetextrequest
 
@@ -12,14 +14,30 @@ if #available(macOS 11, *) {
     REVISION = VNRecognizeTextRequestRevision1
 }
 
+@discardableResult func writeCGImage(_ image: CGImage, to destinationURL: URL) -> Bool {
+    guard let destination = CGImageDestinationCreateWithURL(destinationURL as CFURL, kUTTypePNG, 1, nil) else { return false }
+    CGImageDestinationAddImage(destination, image, nil)
+    return CGImageDestinationFinalize(destination)
+}
+
+func convertCIImageToCGImage(inputImage: CIImage) -> CGImage! {
+    let context = CIContext(options: nil)
+    return context.createCGImage(inputImage, from: inputImage.extent)
+}
+
+func convertCGImageToCIImage(inputImage: CGImage) -> CIImage! {
+    return CIImage(cgImage: inputImage)
+}
+
 func main(args: [String]) -> Int32 {
     guard CommandLine.arguments.count > 1 else {
-        fputs(String(format: "usage: %1$@ image [-min:<minimum-text-height>] [-cropx:x] [-cropy:y] [-insets:<edge-inset-list>]\n", CommandLine.arguments[0]), stderr)
+        fputs(String(format: "usage: %1$@ image [-min:<minimum-text-height>] [-cropx:x] [-cropy:y] [-footer:f] [-insets:<edge-inset-list>]\n", CommandLine.arguments[0]), stderr)
         return 1
     }
   
     var cropx : CGFloat = 0.0
     var cropy : CGFloat = 0.0
+    var footer : CGFloat = 0.0
     var src = ""
     var min : Float = 0.0
     var words : [String] = ["correct"]
@@ -51,6 +69,9 @@ func main(args: [String]) -> Int32 {
       } else if arg.hasPrefix("-cropy") {
         let i = arg.firstIndex(of:":") ?? arg.endIndex
         cropy = CGFloat(Float(arg.suffix(from: arg.index(i, offsetBy:1)))!)
+      } else if arg.hasPrefix("-footer") {
+        let i = arg.firstIndex(of:":") ?? arg.endIndex
+        footer = CGFloat(Float(arg.suffix(from: arg.index(i, offsetBy:1)))!)
       } else if arg.hasPrefix("-cropx") {
           let i = arg.firstIndex(of:":") ?? arg.endIndex
           cropx = CGFloat(Float(arg.suffix(from: arg.index(i, offsetBy:1)))!)
@@ -87,18 +108,26 @@ func main(args: [String]) -> Int32 {
         return 1
     }
 
-  if cropx > 0 || cropy > 0 {
-    let rect = NSEdgeInsets(top:cropy, left:cropx, bottom:navbar, right:0)
+  if cropx > 0 || cropy > 0 || footer > 0 {
+    let rect = NSEdgeInsets(top:cropy, left:cropx, bottom:navbar+footer, right:0)
     crop.append(rect)
   } else if crop.count == 0 {
-    crop.append(NSEdgeInsets(top:navbar, left:0, bottom:navbar, right:0))
+    crop.append(NSEdgeInsets(top:navbar+footer, left:0, bottom:navbar+footer, right:0))
   }
 
-  guard let imgRef = img.cgImage(forProposedRect: &img.alignmentRect, context: nil, hints: nil) else {
+  guard let cgImg = img.cgImage(forProposedRect: &img.alignmentRect, context: nil, hints: nil) else {
     fputs("Error: failed to convert NSImage to CGImage for '\(src)'\n", stderr)
     return 1
   }
-  
+
+  let ciImg = convertCGImageToCIImage(inputImage:cgImg)
+  let currentFilter = CIFilter(name: "CIGammaAdjust")!
+  currentFilter.setValue(ciImg, forKey: kCIInputImageKey)
+  currentFilter.setValue(0.5, forKey: "inputPower")
+  let imgRef = convertCIImageToCGImage(inputImage:currentFilter.outputImage!)!
+
+//  writeCGImage(_:imgRef, to:URL(string:"file:///Volumes/RamDisk/ocrnew.png")!)
+
   let request = VNRecognizeTextRequest { (request, error) in
     let observations = request.results as? [VNRecognizedTextObservation] ?? []
     let obs : [String] = observations.map { $0.topCandidates(1).first?.string ?? ""}
